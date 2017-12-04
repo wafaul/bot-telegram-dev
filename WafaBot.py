@@ -12,6 +12,10 @@ from telebot import util
 from timezonefinder import TimezoneFinder
 import pytz
 import datetime
+import configparser
+import DB
+from DB import ConfigSectionMap
+from google.cloud import translate
 
 #import BaseHTTPServer
 from cgi import parse_header, parse_multipart
@@ -34,17 +38,35 @@ from telebot import types
 import io
 import cgi
 from pprint import pprint
+from sqlalchemy import create_engine, exists
+from sqlalchemy.orm import relationship, sessionmaker
+import pycountry
+import memcache
 
 urllib3.disable_warnings()
 
-API_TOKEN = '164293029:AAEUp2f6ORf0rwZaeFR2lDtKPVteWVcM2xw'
+cfg = configparser.ConfigParser()
+cfg.read("config.cfg")
+mysql_cfg = ConfigSectionMap("mysql")
+telegram_cfg = ConfigSectionMap("telegram")
+apps_cfg = ConfigSectionMap("apps")
 
-WEBHOOK_HOST = 'tb-xl.wafa.id'
-WEBHOOK_PORT = 8443  # 443, 80, 88 or 8443 (port need to be 'open')
-WEBHOOK_LISTEN = '127.0.1.1'  # In some VPS you may need to put here the IP addr
+connection_str = 'mysql://'+mysql_cfg['user']+':'+mysql_cfg['password']+'@'+mysql_cfg['host']+':'+mysql_cfg['port']+'/'+mysql_cfg['db']
+engine = create_engine(connection_str,echo=False)
+Session = sessionmaker(bind=engine)
+session = Session()
+client = translate.Client()
+list_language = client.get_languages()
 
-WEBHOOK_SSL_CERT = '/home/wafa/jke-webhook_cert.pem' #'./webhook_jkebot_cert.pem'  # Path to the ssl certificate
-WEBHOOK_SSL_PRIV = '/home/wafa/jke-webhook_pkey.key' #'./webhook_jkebot_pkey.pem'  # Path to the ssl private key
+#API_TOKEN = '164293029:AAEUp2f6ORf0rwZaeFR2lDtKPVteWVcM2xw'
+API_TOKEN = telegram_cfg['token']
+
+WEBHOOK_HOST = apps_cfg['webhook_host'] 
+WEBHOOK_PORT = int(apps_cfg['webhook_port'])  # 443, 80, 88 or 8443 (port need to be 'open')
+WEBHOOK_LISTEN = apps_cfg['webhook_listen']   # In some VPS you may need to put here the IP addr
+
+WEBHOOK_SSL_CERT = apps_cfg['webhook_ssl_cert']   # Path to the ssl certificate
+WEBHOOK_SSL_PRIV = apps_cfg['webhook_ssl_priv']   # Path to the ssl private key
 
 WEBHOOK_URL_BASE = "https://%s:%s" % (WEBHOOK_HOST, WEBHOOK_PORT)
 WEBHOOK_URL_PATH = "/%s/" % (API_TOKEN)
@@ -53,7 +75,6 @@ command = ['host','whois','dig','ping','traceroute','curl','fail2ban-client','te
 cmd_custom = ['ssl','googler']
 
 tf = TimezoneFinder()
-
 
 def do_reg(self,arg1,arg2):
     return str(os.popen(arg1+ ' ' + arg2))
@@ -495,23 +516,58 @@ def test_loc(message):
 @tb.message_handler(func=lambda message: True)
 def echo_message(message):
     m = message
-    try:
-        mm = m.text.split(' ',1)
-    except:
-        mm = ''
-    if mm[0] in command:
-        cmd=mm[0] + ' ' + mm[1]
-        out = str(os.popen(cmd).read())
-        splitted = util.split_string(out,3000)
-        for text in splitted:
-            tb.reply_to(m,'cmd:' + mm[0] + ' ' + mm[1]+'\n' + text)
-    elif mm[0] in cmd_custom:
-        out = str(cmdlist[mm[0]](0,mm[1]))
-        splitted = util.split_string(out,3000)
-        for text in splitted:
-            tb.reply_to(m,'cmd:' + mm[0] + ' ' + mm[1]+'\n' + text)
+    if not session.query(exists().where(DB.Profile.chat_id == m.chat.id)).scalar():
+        p= DB.Profile()
+        p.chat_id = m.chat.id
+        p.user_id = m.from_user.id
+        p.username = m.from_user.username
+        p.first_name = m.from_user.first_name
+        p.last_name = m.from_user.last_name
+        p.language_code = m.from_user.language_code
+        session.add(p)
+        session.commit()
     else:
-        tb.reply_to(message, message.text)
+        p = session.query(DB.Profile).filter_by(chat_id=m.chat.id).first()
+    if not bool(p.email):
+        match = re.search(r'[\w\.-]+@[\w\.-]+',m.text)
+        if bool(match):
+            p.email = match.group(0)
+            session.commit()
+            tb.reply_to(m,"Thank you, your email "+p.email+" has been recorded to our database")
+            tb.send_message(m.chat.id,"You can ask me anything")
+        else:
+            tb.reply_to(m,"Hi "+p.first_name+", May I know your email?")
+    else:
+        lang = client.detect_language(m.text)
+        if not lang['language'] == p.language_code and float(lang['confidence']) > 0.2 :
+            print(lang['language'])
+            #country = pycountry.countries.get(alpha_2=lang['language'].upper())
+            lang_idx = next((i for i, sublist in enumerate(list_language) if lang['language'] in sublist['language']), -1)
+            print(list_language[lang_idx]['name'])
+            reply = "I detected your language is " + list_language[lang_idx]['name']
+            if not lang['language'] == 'en':
+                rr = client.translate(reply,target_language=lang['language'])
+                tb.reply_to(m,rr['translatedText'])
+            else:
+                tb.reply_to(m,reply)
+        else:
+            try:
+                mm = m.text.split(' ',1)
+            except:
+                mm = ''
+            if mm[0] in command:
+                cmd=mm[0] + ' ' + mm[1]
+                out = str(os.popen(cmd).read())
+                splitted = util.split_string(out,3000)
+                for text in splitted:
+                    tb.reply_to(m,'cmd:' + mm[0] + ' ' + mm[1]+'\n' + text)
+            elif mm[0] in cmd_custom:
+                out = str(cmdlist[mm[0]](0,mm[1]))
+                splitted = util.split_string(out,3000)
+                for text in splitted:
+                    tb.reply_to(m,'cmd:' + mm[0] + ' ' + mm[1]+'\n' + text)
+            else:
+                tb.reply_to(message, message.text)
 
 
 
