@@ -1,0 +1,26 @@
+[mysql]
+host: localhost
+user: root
+password: password
+db: table_bot
+
+[apps]
+gcloud_api: #google cloud api
+webhook_host: localhost #webhook host
+webhook_port: 8443
+webhook_listen: 127.0.1.1
+webhook_ssl_cert: wafabot_webhook_cert.pem
+webhook_ssl_priv: wafabot_webhook_pkey.key
+
+[telegram]
+token: API_TOKEN 
+
+[dwh]
+host1: 
+host2: 
+host3: 
+
+[ws]
+host_ws1: 
+host_ws2: 
+
