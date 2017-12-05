@@ -42,6 +42,7 @@ from sqlalchemy import create_engine, exists
 from sqlalchemy.orm import relationship, sessionmaker
 import pycountry
 import memcache
+import nltk
 
 urllib3.disable_warnings()
 
@@ -161,10 +162,17 @@ def send_welcome(message):
         p.language_code = m.from_user.language_code
         session.add(p)
         session.commit()
+        memc.set(str(m.chat.id),p)
+        print("new user, adding to db and set memc")
         txt = "Hi " + p.first_name + ". This is the first time you chat me, May I know your email address?"
         tb.reply_to(m,txt)       
     else:
-        p = session.query(DB.Profile).filter_by(chat_id=m.chat.id).first()
+        p = memc.get(str(m.chat.id))
+        if not p:
+            p = session.query(DB.Profile).filter_by(chat_id=m.chat.id).first()
+            memc.set(str(m.chat.id),p)
+            print("user not found in memc, retrieve from db and set to memc")
+                   
         txt = "Welcome back "+p.first_name+", How can I help you?"
         tb.reply_to(m,txt)
 
@@ -540,27 +548,39 @@ def echo_message(message):
         p.language_code = m.from_user.language_code
         session.add(p)
         session.commit()
+        memc.set(str(m.chat.id),p)
+        print("new user, adding into db and set memc")
     else:
-        p = session.query(DB.Profile).filter_by(chat_id=m.chat.id).first()
+        p = memc.get(str(m.chat.id))
+        if not p:
+            p = session.query(DB.Profile).filter_by(chat_id=m.chat.id).first()
+            print("get from db, store to memc")
+            memc.set(str(m.chat.id),p)
+        
     if not bool(p.email):
         match = re.search(r'[\w\.-]+@[\w\.-]+',m.text)
         if bool(match):
             p.email = match.group(0)
             session.commit()
+            memc.set(str(m.chat.id),p)
+            print("update email to db and re-set memc")
             tb.reply_to(m,"Thank you, your email "+p.email+" has been recorded to our database")
             tb.send_message(m.chat.id,"You can ask me anything")
         else:
             tb.reply_to(m,"Hi "+p.first_name+", May I know your email?")
     else:
-        lang = client.detect_language(m.text)
-        if not lang['language'] == p.language_code and float(lang['confidence']) > 0.2 :
-            print(lang['language'])
+        lang = client.translate(m.text,target_language='en')
+        if not lang['detectedSourceLanguage'] == p.language_code :
+            print(lang['detectedSourceLanguage'])
             #country = pycountry.countries.get(alpha_2=lang['language'].upper())
-            lang_idx = next((i for i, sublist in enumerate(list_language) if lang['language'] in sublist['language']), -1)
-            print(list_language[lang_idx]['name'])
+            lang_idx = next((i for i, sublist in enumerate(list_language) if lang['detectedSourceLanguage'] in sublist['language']), -1)
+            print(list_language[lang_idx]['name']+" : "+lang['translatedText'])
+            tkn = nltk.word_tokenize(lang['translatedText'])
+            tag_tkn = nltk.pos_tag(tkn)
+            print(tag_tkn)
             reply = "I detected your language is " + list_language[lang_idx]['name']
-            if not lang['language'] == 'en':
-                rr = client.translate(reply,target_language=lang['language'])
+            if not lang['detectedSourceLanguage'] == 'en':
+                rr = client.translate(reply,target_language=lang['detectedSourceLanguage'])
                 tb.reply_to(m,rr['translatedText'])
             else:
                 tb.reply_to(m,reply)
