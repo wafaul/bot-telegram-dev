@@ -57,6 +57,7 @@ Session = sessionmaker(bind=engine)
 session = Session()
 client = translate.Client()
 list_language = client.get_languages()
+memc = memcache.Client(['127.0.0.1:11211'], debug=1)
 
 #API_TOKEN = '164293029:AAEUp2f6ORf0rwZaeFR2lDtKPVteWVcM2xw'
 API_TOKEN = telegram_cfg['token']
@@ -149,10 +150,23 @@ class WebhookHandler(BaseHTTPRequestHandler):
 # Handle '/start' and '/help'
 @tb.message_handler(commands=['help', 'start'])
 def send_welcome(message):
-    tb.reply_to(message, """\
-Testing help
-
-""")
+    m = message
+    if not session.query(exists().where(DB.Profile.chat_id == m.chat.id)).scalar():
+        p= DB.Profile()
+        p.chat_id = m.chat.id
+        p.user_id = m.from_user.id
+        p.username = m.from_user.username
+        p.first_name = m.from_user.first_name
+        p.last_name = m.from_user.last_name
+        p.language_code = m.from_user.language_code
+        session.add(p)
+        session.commit()
+        txt = "Hi " + p.first_name + ". This is the first time you chat me, May I know your email address?"
+        tb.reply_to(m,txt)       
+    else:
+        p = session.query(DB.Profile).filter_by(chat_id=m.chat.id).first()
+        txt = "Welcome back "+p.first_name+", How can I help you?"
+        tb.reply_to(m,txt)
 
 @tb.message_handler(commands=['xlsrk1'])
 def pdfrk(m):
